@@ -7,6 +7,15 @@
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
 
+//Add Command start
+#define GTD_SIZE (3072)
+#define CMT_SIZE (1024)
+#define CTP_SIZE (32)
+#define N_CMT_BUCKETS (10)
+#define N_CTP_BUCKETS (5)
+#define SECTS_PER_TR_PAGE (512)
+//Add Command end
+
 enum {
     NAND_READ =  0,
     NAND_WRITE = 1,
@@ -209,7 +218,84 @@ struct ssd {
     bool *dataplane_started_ptr;
     QemuThread ftl_thread;
     struct FemuCtrl* n;
+
+    //Add command start
+    struct gtd_entry* gtd;
+
+    struct cmt_entry* cmt;
+    struct cmt_entry* cmt_lru_head;
+    struct cmt_entry* cmt_lru_tail;
+    struct cmt_hash* cmt_hash_table;
+
+    struct ctp_entry* ctp;
+    struct ctp_entry* ctp_lru_head;
+    struct ctp_entry* ctp_lru_head;
+    struct ctp_hash* ctp_hash_table;
+
+    struct trans_flash translation_flash
+    //Add command end
 };
+
+//Add command start
+struct map_page {
+    struct ppa* dppn;
+};
+
+struct gtd_entry {
+    struct ppa tppn;
+    bool location;
+    bool dirty;
+};
+
+struct cmt_entry {
+    struct data {
+        uint64_t dlpn;
+        struct ppa dppn;
+        bool dirty;
+    } data;
+    struct cmt_entry* prev;
+    struct cmt_entry* next;
+    struct cmt_entry* lru_prev;
+    struct cmt_entry* lru_next;
+};
+
+struct cmt_hash {
+    uint64_t hash_value;
+    struct cmt_entry* cmt_entries;
+    struct cmt_hash* hash_next;
+};
+
+struct ctp_entry {
+    uint64_t tvpn;
+    bool dirty;
+    struct map_page* mp;
+    struct ppa tppn;
+    struct ctp_entry* prev;
+    struct ctp_entry* next;
+    struct ctp_entry* lru_prev;
+    struct ctp_entry* lru_next;
+};
+
+struct ctp_hash {
+    uint64_t hash_value;
+    struct ctp_entry* ctp_entries;
+    struct ctp_hash* hash_next;
+};
+
+struct trans_block {
+    int valid_page_num;
+    int invalid_page_num;
+    int* page_state;
+    struct map_page* pages;
+};
+
+struct trans_flash {
+    int free_blk_num;
+    struct trans_block* blocks;
+    int cur_blk;
+    int cur_pg;
+};
+//Add command end
 
 void ssd_init(FemuCtrl *n);
 
