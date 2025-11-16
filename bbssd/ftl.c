@@ -365,15 +365,15 @@ static void ssd_init_rmap(struct ssd *ssd)
 //Get ppa
 struct ppa ppa_get_CDFTL(struct ssd* ssd, uint64_t lpn)
 {
-    uint64_t tvpn = lpn / 512;
-    uint64_t offset = lpn % 512;
+    uint64_t tvpn = lpn / SECTS_PER_TRANS_PAGE;
+    uint64_t offset = lpn % SECTS_PER_TRANS_PAGE;
 
-    struct cmt_entry* cmten = fine_cmt(ssd, lpn);
+    struct cmt_entry* cmten = find_cmt(ssd, lpn);
     if (cmten != 0)
-        return cmt_entry->data.dppn;
+        return cmten->data.dppn;
 
     struct ctp_entry* ctpen = find_ctp(ssd, tvpn);
-    if (ctpen != 0)
+    if (ctpen == 0)
     {
         ctpen = ctp_free_alloc(ssd);
         ctpen->tvpn = tvpn;
@@ -394,20 +394,20 @@ struct ppa ppa_get_CDFTL(struct ssd* ssd, uint64_t lpn)
 //Set ppa
 void ppa_set_CDFTL(struct ssd* ssd, uint64_t lpn, struct ppa* ppa)
 {
-    uint64_t tvpn = lpn / 512;
-    uint64_t offset = lpn % 512;
+    uint64_t tvpn = lpn / SECTS_PER_TRANS_PAGE;
+    uint64_t offset = lpn % SECTS_PER_TRANS_PAGE;
 
     //CTP hit
     struct cmt_entry* cmten;
     struct ctp_entry* ctpen = find_ctp(ssd, tvpn);
-    if (ctepen != 0)
+    if (ctpen != 0)
     {
         ctpen->mp->dppn[offset] = *ppa;
         ssd->gtd[tvpn].dirty = 1;
 
         cmten = find_cmt(ssd, lpn);
         if (cmten != 0)
-            cmt_delte(ssd, cmten);
+            cmt_delete(ssd, cmten);
         return;
     }
 
@@ -415,7 +415,7 @@ void ppa_set_CDFTL(struct ssd* ssd, uint64_t lpn, struct ppa* ppa)
     cmten = find_cmt(ssd, lpn);
     if (cmten != 0)
     {
-        cmten->data.dppn = ppa;
+        cmten->data.dppn = *ppa;
         cmten->data.dirty = 1;
         return;
     }
@@ -424,7 +424,7 @@ void ppa_set_CDFTL(struct ssd* ssd, uint64_t lpn, struct ppa* ppa)
     ctpen = ctp_free_alloc(ssd);
     ctpen->tvpn = tvpn;
     trans_read(ssd, tvpn, ctpen->mp);
-    ctpen->mp->dppn[offset] = ppa;
+    ctpen->mp->dppn[offset] = *ppa;
     ssd->gtd[tvpn].dirty = 1;
     ssd->gtd[tvpn].location = 0;
     ctp_insert(ssd, ctpen);
@@ -447,17 +447,19 @@ void trans_write(struct ssd* ssd, uint64_t tvpn, struct map_page* mp)
         tf->blocks[blk].invalid_page_num++;
     }
 
-    memcpy(&tf->blocks[tf->cur_blk].pages[tf->cur_pg].dppn, &mp->dppn, sizeof(struct ppa) * 512);
+    memcpy(&tf->blocks[tf->cur_blk].pages[tf->cur_pg].dppn, &mp->dppn, sizeof(struct ppa) * SECTS_PER_TRANS_PAGE);
+    tf->blocks[tf->cur_blk].pages[tf->cur_pg].tvpn = tvpn;
     tf->blocks[tf->cur_blk].valid_page_num++;
+    gtden->tppn.ppa = tf->cur_blk * ssd->sp.pgs_per_blk + tf->cur_pg;
     gtden->location = 1;
     gtden->dirty = 0;
 
-    ++tf->cur_pg;
+    ++(tf->cur_pg);
     if (tf->cur_pg >= ssd->sp.pgs_per_blk)
     {
         tf->cur_pg = 0;
-        ++tf->cur_blk;
-        --tf->free_blk_num;
+        ++(tf->cur_blk);
+        --(tf->free_blk_num);
     }
 }
 void trans_read(struct ssd* ssd, uint64_t tvpn, struct map_page* mp)
@@ -467,14 +469,14 @@ void trans_read(struct ssd* ssd, uint64_t tvpn, struct map_page* mp)
     
     if (gtden->tppn.ppa == UNMAPPED_PPA)
     {
-        for (int i = 0; i < 512; ++i)
+        for (int i = 0; i < SECTS_PER_TRANS_PAGE; ++i)
             mp->dppn[i].ppa = UNMAPPED_PPA;
         return;
     }
 
     int blk = gtden->tppn.ppa / ssd->sp.pgs_per_blk;
     int pg = gtden->tppn.ppa % ssd->sp.pgs_per_blk;
-    memcpy(%mp->dppn, %tf->blocks[blk].pages[pg].dppn, sizeof(struct ppa) * 512);
+    memcpy(&mp->dppn, &tf->blocks[blk].pages[pg].dppn, sizeof(struct ppa) * SECTS_PER_TRANS_PAGE);
 }
 void trans_gc(struct ssd* ssd)
 {
@@ -483,7 +485,7 @@ void trans_gc(struct ssd* ssd)
     int victim_blk = -1;
     int max_invalid_page = -1;
 
-    for (int i = 0; i < 16; ++i)
+    for (int i = 0; i < N_TRANS_BLK; ++i)
     {
         if (tf->blocks[i].invalid_page_num > max_invalid_page)
         {
@@ -495,7 +497,7 @@ void trans_gc(struct ssd* ssd)
         return;
 
     int free_blk = -1;
-    for (int i = 0; i < 16; ++i)
+    for (int i = 0; i < N_TRANS_BLK; ++i)
     {
         if (tf->blocks[i].invalid_page_num == 0 && tf->blocks[i].valid_page_num == 0)
         {
@@ -507,27 +509,29 @@ void trans_gc(struct ssd* ssd)
         return;
 
     int pgs_per_blk = ssd->sp.pgs_per_blk;
-    int free_index = 0;
+    int free_pg = 0;
     for (int i = 0; i < pgs_per_blk; ++i)
     {
-        if (tf->blocks[victim].page_state[i] == 0)
+        if (tf->blocks[victim_blk].page_state[i] == 0)
         {
-            memcpy(&tf->blocks[free_blk].pages[free_index].dppn, &tf->blocks[victim_blk].pages[i].dppn, sizeof(struct ppa) * 512);
+            memcpy(&tf->blocks[free_blk].pages[free_pg].dppn, &tf->blocks[victim_blk].pages[i].dppn, sizeof(struct ppa) * SECTS_PER_TRANS_PAGE);
+            uint64_t tvpn = tf->blocks[victim_blk].pages[i].tvpn;
+            ssd->gtd[tvpn].tppn.ppa = free_blk * pgs_per_blk + free_pg;
             tf->blocks[free_blk].valid_page_num++;
-            ++free_index;
+            ++free_pg;
         }
     }
     for (int i = 0; i < pgs_per_blk; ++i)
     {
         tf->blocks[victim_blk].page_state[i] = 0;
-        for (int j = 0; j < 512; ++j)
+        for (int j = 0; j < SECTS_PER_TRANS_PAGE; ++j)
             tf->blocks[victim_blk].pages[i].dppn[j].ppa = UNMAPPED_PPA;
     }
     tf->blocks[victim_blk].invalid_page_num = 0;
     tf->blocks[victim_blk].valid_page_num = 0;
 
     tf->cur_blk = free_blk;
-    tf->cur_blk = free_pg;
+    tf->cur_pg = free_pg;
 }
 
 //CMT command
@@ -544,6 +548,8 @@ void cmt_lru_insert_to_tail(struct ssd* ssd, struct cmt_entry* cmten)
 
     cmten->lru_prev = ssd->cmt_lru_tail;
     cmten->lru_next = 0;
+    if (ssd->cmt_lru_head == 0) 
+        ssd->cmt_lru_head = cmten;
     ssd->cmt_lru_tail = cmten;
 }
 void cmt_lru_delete(struct ssd* ssd, struct cmt_entry* cmten)
@@ -561,7 +567,7 @@ void cmt_lru_delete(struct ssd* ssd, struct cmt_entry* cmten)
 }
 struct cmt_entry* find_cmt(struct ssd* ssd, uint64_t dlpn)
 {
-    struct cmt_entry* cmten = ssd->cmt_hash_table[tvpn % 10].cmt_entries;
+    struct cmt_entry* cmten = ssd->cmt_hash_table[tvpn % N_CMT_BUCKETS].cmt_entries;
 
     while (cmten != 0)
     {
@@ -576,21 +582,21 @@ struct cmt_entry* find_cmt(struct ssd* ssd, uint64_t dlpn)
 }
 struct cmt_entry* cmt_free_alloc(struct ssd* ssd)
 {
-    for (int i = 0; i < 1024; i++)
+    for (int i = 0; i < CMT_SIZE; i++)
     {
         if (ssd->cmt[i].data.dlpn == INVALID_LPN)
             return &ssd->cmt[i];
     }
 
     struct cmt_entry* victim = ssd->cmt_lru_head;
-    cmt_delete(ssd, ssd->cmt_lru_head);
+    cmt_delete(ssd, victim);
     return victim;
 }
 void cmt_insert(struct ssd* ssd, struct cmt_entry* cmten)
 {
-    cmten->next = ssd->cmt_hash_table[cmten->data.dlpn % 10].cmt_entries;
+    cmten->next = ssd->cmt_hash_table[cmten->data.dlpn % N_CMT_BUCKETS].cmt_entries;
     cmten->prev = 0;
-    ssd->cmt_hash_table[cmten->data.dlpn % 10].cmt_entries = cmten;
+    ssd->cmt_hash_table[cmten->data.dlpn % N_CMT_BUCKETS].cmt_entries = cmten;
 
     cmt_lru_insert_to_tail(ssd, cmten);
 }
@@ -600,21 +606,21 @@ void cmt_delete(struct ssd* ssd, struct cmt_entry* cmten)
         cmten->prev->next = cmten->next;
     if (cmten->next != 0)
         cmten->next->prev = cmten->prev;
-    if (ssd->cmt_hash_table[cmten->data.dlpn % 10].cmt_entries == cmten)
-        ssd->cmt_hash_table[cmten->data.dlpn % 10].cmt_entries = cmten->next;
+    if (ssd->cmt_hash_table[cmten->data.dlpn % N_CMT_BUCKETS].cmt_entries == cmten)
+        ssd->cmt_hash_table[cmten->data.dlpn % N_CMT_BUCKETS].cmt_entries = cmten->next;
     cmt_lru_delete(ssd, cmten);
 
-    uint64_t tvpn = cmten->data.dlpn / 512;
+    uint64_t tvpn = cmten->data.dlpn / SECTS_PER_TRANS_PAGE;
     struct ctp_entry* ctp = find_ctp(ssd, tvpn);
 
     if (ctp != 0)
-        ctp->mp->dppn[cmten->data.dlpn % 512] = cmten->data.dppn;
+        ctp->mp->dppn[cmten->data.dlpn % SECTS_PER_TRANS_PAGE] = cmten->data.dppn;
     else
     {
         struct map_page* mp;
-        mp->dppn = g_malloc0(sizeof(struct ppa) * 512);
+        mp->dppn = g_malloc0(sizeof(struct ppa) * SECTS_PER_TRANS_PAGE);
         trans_read(ssd, tvpn, mp);
-        mp->dppn[cmten->data.dlpn % 512] = cmten->data.dppn;
+        mp->dppn[cmten->data.dlpn % SECTS_PER_TRANS_PAGE] = cmten->data.dppn;
         trans_wrtie(ssd, tvpn, mp);
     }
 
@@ -640,6 +646,8 @@ void ctp_lru_insert_to_tail(struct ssd* ssd, struct ctp_entry* ctpen)
 
     ctpen->lru_prev = ssd->ctp_lru_tail;
     ctpen->lru_next = 0;
+    if (ssd->ctp_lru_head == 0) 
+        ssd->ctp_lru_head = ctpen;
     ssd->ctp_lru_tail = ctpen;
 }
 void ctp_lru_delete(struct ssd* ssd, struct ctp_entry* ctpen)
@@ -657,7 +665,7 @@ void ctp_lru_delete(struct ssd* ssd, struct ctp_entry* ctpen)
 }
 struct ctp_entry* find_ctp(struct ssd* ssd, uint64_t tvpn)
 {
-    struct ctp_entry* ctpen = ssd->ctp_hash_table[tvpn % 5].ctp_entries;
+    struct ctp_entry* ctpen = ssd->ctp_hash_table[tvpn % N_CTP_BUCKETS].ctp_entries;
 
     while (ctpen != 0)
     {
@@ -672,21 +680,21 @@ struct ctp_entry* find_ctp(struct ssd* ssd, uint64_t tvpn)
 }
 struct ctp_entry* ctp_free_alloc(struct ssd* ssd)
 {
-    for (int i = 0; i < 32; i++)
+    for (int i = 0; i < CTP_SIZE; i++)
     {
         if (ssd->ctp[i].tvpn == INVALID_LPN)
             return &ssd->ctp[i];
     }
 
     struct ctp_entry* victim = ssd->ctp_lru_head;
-    ctp_delete(ssd, ssd->ctp_lru_head);
+    ctp_delete(ssd, victim);
     return victim;
 }
 void ctp_insert(struct ssd* ssd, struct ctp_entry* ctpen)
 {
-    ctpen->next = ssd->ctp_hash_table[ctpen->tvpn % 5].ctp_entries;
+    ctpen->next = ssd->ctp_hash_table[ctpen->tvpn % N_CTP_BUCKETS].ctp_entries;
     ctpen->prev = 0;
-    ssd->ctp_hash_table[ctpen->tvpn].ctp_entries = ctpen;
+    ssd->ctp_hash_table[ctpen->tvpn % N_CTP_BUCKETS].ctp_entries = ctpen;
     
     ctp_lru_insert_to_tail(ssd, ctpen);
 }
@@ -696,8 +704,8 @@ void ctp_delete(struct ssd* ssd, struct ctp_entry* ctpen)
         ctpen->prev->next = ctpen->next;
     if (ctpen->next != 0)
         ctpen->next->prev = ctpen->prev;
-    if (ssd->ctp_hash_table[ctpen->tvpn % 5].ctp_entries == ctpen)
-        ssd->ctp_hash_table[ctpen->tvpn % 5].ctp_entries = ctpen->next;
+    if (ssd->ctp_hash_table[ctpen->tvpn % N_CTP_BUCKETS].ctp_entries == ctpen)
+        ssd->ctp_hash_table[ctpen->tvpn % N_CTP_BUCKETS].ctp_entries = ctpen->next;
     ctp_lru_delete(ssd, ctpen);
 
     if (ctpen->tvpn != INVALID_LPN && ssd->gtd[ctpen->tvpn].dirty == 1)
@@ -716,8 +724,8 @@ void ctp_delete(struct ssd* ssd, struct ctp_entry* ctpen)
 //GTD init
 void gtd_init(struct ssd* ssd)
 {
-    ssd->gtd = g_malloc0(sizeof(struct gtd_entry) * 3072);
-    for (int i = 0; i < 3072; i++)
+    ssd->gtd = g_malloc0(sizeof(struct gtd_entry) * GTD_SIZE);
+    for (int i = 0; i < GTD_SIZE; i++)
     {
         ssd->gtd[i].tppn.ppa = UNMAPPED_PPA;
         ssd->gtd[i].location = 1;
@@ -728,10 +736,10 @@ void gtd_init(struct ssd* ssd)
 //CMT init
 void cmt_init(struct ssd* ssd)
 {
-    ssd->cmt = g_malloc0(sizeof(struct cmt_entry) * 1024);
+    ssd->cmt = g_malloc0(sizeof(struct cmt_entry) * CMT_SIZE);
     ssd->cmt_lru_head = 0;
     ssd->cmt_lru_tail = 0;
-    for (int i = 0; i < 1024; i++)
+    for (int i = 0; i < CMT_SIZE; i++)
     {
         ssd->cmt[i].data.dlpn = INVALID_LPN;
         ssd->cmt[i].data.dppn.ppa = UNMAPPED_PPA;
@@ -742,13 +750,13 @@ void cmt_init(struct ssd* ssd)
         ssd->cmt[i].lru_next = 0;
     }
 
-    ssd->cmt_hash_table = g_malloc0(sizeof(struct cmt_hash) * 10);
-    for (int i = 0; i < 10; i++)
+    ssd->cmt_hash_table = g_malloc0(sizeof(struct cmt_hash) * N_CMT_BUCKETS);
+    for (int i = 0; i < N_CMT_BUCKETS; i++)
     {
         ssd->cmt_hash_table[i].hash_value = i;
         ssd->cmt_hash_table[i].cmt_entries = 0;
         ssd->cmt_hash_table[i].hash_next = 0;
-        if (i != 9)
+        if (i != (CMT_SIZE - 1))
             ssd->cmt_hash_table[i].hash_next = &ssd->cmt_hash_table[i + 1];
     }
 }
@@ -756,28 +764,28 @@ void cmt_init(struct ssd* ssd)
 //CTP init
 void ctp_init(struct ssd* ssd)
 {
-    ssd->ctp = g_malloc0(sizeof(struct ctp_entry) * 32);
+    ssd->ctp = g_malloc0(sizeof(struct ctp_entry) * CTP_SIZE);
     ssd->ctp_lru_head = 0;
     ssd->ctp_lru_tail = 0;
-    for (int i = 0; i < 32; i++)
+    for (int i = 0; i < CTP_SIZE; i++)
     {
         ssd->ctp[i].tvpn = INVALID_LPN;
         ssd->ctp[i].tppn.ppa = UNMAPPED_PPA;
         ssd->ctp[i].mp = g_malloc0(sizeof(struct map_page));
-        ssd->ctp[i].mp->dppn = g_malloc0(sizeof(struct ppa) * 512);
+        ssd->ctp[i].mp->dppn = g_malloc0(sizeof(struct ppa) * SECTS_PER_TRANS_PAGE);
         ssd->ctp[i].prev = 0;
         ssd->ctp[i].next = 0;
         ssd->ctp[i].lru_prev = 0;
         ssd->ctp[i].lru_next = 0;
     }
 
-    ssd->ctp_hash_table = g_malloc0(sizeof(struct ctp_hash) * 5);
-    for (int i = 0; i < 5; i++)
+    ssd->ctp_hash_table = g_malloc0(sizeof(struct ctp_hash) * N_CTP_BUCKETS);
+    for (int i = 0; i < CTP_SIZE; i++)
     {
         ssd->ctp_hash_table[i].hash_value = i;
         ssd->ctp_hash_table[i].ctp_entries = 0;
         ssd->ctp_hash_table[i].hash_next = 0;
-        if (i != 4)
+        if (i != (CTP_SIZE - 1))
             ssd->ctp_hash_table[i].hash_next = &ssd->ctp_hash_table[i + 1];
     }
 }
@@ -785,12 +793,12 @@ void ctp_init(struct ssd* ssd)
 //Translation flash init
 void translation_flash_init(struct ssd* ssd)
 {
-    ssd->translation_flash->free_blk_num = 16;
+    ssd->translation_flash->free_blk_num = N_TRANS_BLK;
     ssd->translation_flash->cur_blk = 0;
     ssd->translation_flash->cur_pg = 0;
-    ssd->translation_flash->blocks = g_malloc0(sizeof(struct trans_block) * 16);
+    ssd->translation_flash->blocks = g_malloc0(sizeof(struct trans_block) * N_TRANS_BLK);
     int pgs_per_blk = ssd->sp->pgs_per_blk;
-    for (int i = 0; i < 16; i++)
+    for (int i = 0; i < N_TRANS_BLK; i++)
     {
         ssd->translation_flash->blocks[i].valid_page_num = 0;
         ssd->translation_flash->blocks[i].invalid_page_num = 0;
@@ -799,8 +807,9 @@ void translation_flash_init(struct ssd* ssd)
         for (int j = 0; j < pgs_per_blk; j++)
         {
             ssd->translation_flash->blocks[i].page_state[j] = 0; //0:valid 1:invalid
-            ssd->translation_flash->blocks[i].pages[j].dppn = g_malloc0(sizeof(struct ppa) * 512);
-            for (int k = 0; k < 512; k++)
+            ssd->translation_flash->blocks[i].pages[j].dppn = g_malloc0(sizeof(struct ppa) * SECTS_PER_TRANS_PAGE);
+            ssd->translation_flash->blocks[i].pages[j].tvpn = INVALID_LPN;
+            for (int k = 0; k < SECTS_PER_TRANS_PAGE; k++)
                 ssd->translation_flash->blocks[i].pages[j].dppn[k].ppa = UNMAPPED_PPA;
         }
     }
