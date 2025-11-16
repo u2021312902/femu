@@ -7,14 +7,13 @@
 #define INVALID_LPN     (~(0ULL))
 #define UNMAPPED_PPA    (~(0ULL))
 
-//Add Command start
 #define GTD_SIZE (3072)
 #define CMT_SIZE (1024)
 #define CTP_SIZE (32)
 #define N_CMT_BUCKETS (10)
 #define N_CTP_BUCKETS (5)
-#define SECTS_PER_TR_PAGE (512)
-//Add Command end
+#define SECTS_PER_TRANS_PAGE (512)
+#define N_TRANS_BLK (16)
 
 enum {
     NAND_READ =  0,
@@ -203,42 +202,10 @@ struct nand_cmd {
     int64_t stime; /* Coperd: request arrival time */
 };
 
-struct ssd {
-    char *ssdname;
-    struct ssdparams sp;
-    struct ssd_channel *ch;
-    struct ppa *maptbl; /* page level mapping table */
-    uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
-    struct write_pointer wp;
-    struct line_mgmt lm;
-
-    /* lockless ring for communication with NVMe IO thread */
-    struct rte_ring **to_ftl;
-    struct rte_ring **to_poller;
-    bool *dataplane_started_ptr;
-    QemuThread ftl_thread;
-    struct FemuCtrl* n;
-
-    //Add command start
-    struct gtd_entry* gtd;
-
-    struct cmt_entry* cmt;
-    struct cmt_entry* cmt_lru_head;
-    struct cmt_entry* cmt_lru_tail;
-    struct cmt_hash* cmt_hash_table;
-
-    struct ctp_entry* ctp;
-    struct ctp_entry* ctp_lru_head;
-    struct ctp_entry* ctp_lru_head;
-    struct ctp_hash* ctp_hash_table;
-
-    struct trans_flash translation_flash
-    //Add command end
-};
-
 //Add command start
 struct map_page {
     struct ppa* dppn;
+    uint64_t tvpn;
 };
 
 struct gtd_entry {
@@ -296,6 +263,39 @@ struct trans_flash {
     int cur_pg;
 };
 //Add command end
+
+struct ssd {
+    char *ssdname;
+    struct ssdparams sp;
+    struct ssd_channel *ch;
+    struct ppa *maptbl; /* page level mapping table */
+    uint64_t *rmap;     /* reverse mapptbl, assume it's stored in OOB */
+    struct write_pointer wp;
+    struct line_mgmt lm;
+
+    /* lockless ring for communication with NVMe IO thread */
+    struct rte_ring **to_ftl;
+    struct rte_ring **to_poller;
+    bool *dataplane_started_ptr;
+    QemuThread ftl_thread;
+    struct FemuCtrl* n;
+
+    //Add command start
+    struct gtd_entry* gtd;
+
+    struct cmt_entry* cmt;
+    struct cmt_entry* cmt_lru_head;
+    struct cmt_entry* cmt_lru_tail;
+    struct cmt_hash* cmt_hash_table;
+
+    struct ctp_entry* ctp;
+    struct ctp_entry* ctp_lru_head;
+    struct ctp_entry* ctp_lru_tail;
+    struct ctp_hash* ctp_hash_table;
+
+    struct trans_flash translation_flash;
+    //Add command end
+};
 
 void ssd_init(FemuCtrl *n);
 
