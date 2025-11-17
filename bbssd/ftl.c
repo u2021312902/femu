@@ -1455,6 +1455,34 @@ static uint64_t ssd_trim(struct ssd *ssd, NvmeRequest *req)
     return 0;  // Assume TRIM operations have no NAND latency
 }
 
+//Add command start
+void ssd_print_stats(struct ssd* ssd)
+{
+    double cmt_hr = 0.0;
+    double ctp_hr = 0.0;
+    double waf = 0.0;
+
+    if (ssd->perf_stats.cmt_accesses > 0) {
+        cmt_hr = (double)ssd->perf_stats.cmt_hits / ssd->perf_stats.cmt_accesses;
+    }
+
+    if (ssd->perf_stats.ctp_accesses > 0) {
+        ctp_hr = (double)ssd->perf_stats.ctp_hits / ssd->perf_stats.ctp_accesses;
+    }
+
+    if (ssd->perf_stats.host_nand_writes > 0) {
+        waf = (double)ssd->perf_stats.total_nand_writes / ssd->perf_stats.host_nand_writes;
+    }
+
+    printf("    CMT hit ratio: %.4f (%"PRIu64"/%"PRIu64")\n",
+        cmt_hr, ssd->perf_stats.cmt_hits, ssd->perf_stats.cmt_accesses);
+    printf("    CTP hit ratio: %.4f (%"PRIu64"/%"PRIu64")\n",
+        ctp_hr, ssd->perf_stats.ctp_hits, ssd->perf_stats.ctp_accesses);
+    printf("    WAF: %.4f (%"PRIu64"/%"PRIu64")\n",
+        waf, ssd->perf_stats.total_nand_writes, ssd->perf_stats.host_nand_writes);
+}
+//Add command end
+
 static void *ftl_thread(void *arg)
 {
     FemuCtrl *n = (FemuCtrl *)arg;
@@ -1514,6 +1542,7 @@ static void *ftl_thread(void *arg)
             }
         }
     }
+    ssd_print_stats(ssd);
 
     return NULL;
 }
