@@ -665,14 +665,17 @@ static struct ppa ppa_get_CDFTL(struct ssd* ssd, uint64_t lpn)
     if (cmten != 0)
         return cmten->data.dppn;
 
-    struct ctp_entry* ctpen = find_ctp(ssd, tvpn);
-    if (ctpen == 0)
-    {
+    struct ctp_entry* ctpen = NULL;
+    struct gtd_entry* gtden = &ssd->gtd[tvpn];
+    if (gtden->location == 0) {
+        ctpen = find_ctp(ssd, tvpn);
+    }
+    if (gtden->location == 1 || ctpen == 0) {
         ctpen = ctp_free_alloc(ssd);
         ctpen->tvpn = tvpn;
         trans_read(ssd, tvpn, ctpen->mp);
         ctp_insert(ssd, ctpen);
-        ssd->gtd[tvpn].location = 0;
+        gtden->location = 0;
     }
 
     cmten = cmt_free_alloc(ssd);
@@ -690,37 +693,41 @@ static void ppa_set_CDFTL(struct ssd* ssd, uint64_t lpn, struct ppa* ppa)
     uint64_t tvpn = lpn / SECTS_PER_TRANS_PAGE;
     uint64_t offset = lpn % SECTS_PER_TRANS_PAGE;
 
+    struct cmt_entry* cmten = NULL;
+    struct ctp_entry* ctpen = NULL;
+    struct gtd_entry* gtden = &ssd->gtd[tvpn];
     //CTP hit
-    struct cmt_entry* cmten;
-    struct ctp_entry* ctpen = find_ctp(ssd, tvpn);
-    if (ctpen != 0)
-    {
+    if (gtden->location == 0) {
+        ctpen = find_ctp(ssd, tvpn);
         ctpen->mp->dppn[offset] = *ppa;
         ssd->gtd[tvpn].dirty = 1;
-
+    
         cmten = find_cmt(ssd, lpn);
         if (cmten != 0)
             cmt_delete(ssd, cmten);
         return;
     }
-
     //CTP miss
-    cmten = find_cmt(ssd, lpn);
-    if (cmten != 0)
-    {
-        cmten->data.dppn = *ppa;
-        cmten->data.dirty = 1;
-        return;
+    if (gtden->location == 1 || ctpen == 0) {
+        cmten = find_cmt(ssd, lpn);
+        //CMT hit
+        if (cmten != 0)
+        {
+            cmten->data.dppn = *ppa;
+            cmten->data.dirty = 1;
+            return;
+        }
+        //CMT miss
+        else {
+            ctpen = ctp_free_alloc(ssd);
+            ctpen->tvpn = tvpn;
+            trans_read(ssd, tvpn, ctpen->mp);
+            ctpen->mp->dppn[offset] = *ppa;
+            ssd->gtd[tvpn].dirty = 1;
+            ssd->gtd[tvpn].location = 0;
+            ctp_insert(ssd, ctpen);
+        }
     }
-
-    //CTP miss, CMT miss
-    ctpen = ctp_free_alloc(ssd);
-    ctpen->tvpn = tvpn;
-    trans_read(ssd, tvpn, ctpen->mp);
-    ctpen->mp->dppn[offset] = *ppa;
-    ssd->gtd[tvpn].dirty = 1;
-    ssd->gtd[tvpn].location = 0;
-    ctp_insert(ssd, ctpen);
 }
 
 //GTD init
