@@ -404,6 +404,8 @@ static void trans_gc(struct ssd* ssd)
             ssd->gtd[tvpn].tppn.ppa = free_blk * pgs_per_blk + free_pg;
             tf->blocks[free_blk].valid_page_num++;
             ++free_pg;
+            ssd->gtd[tvpn].location = 1;
+            ssd->gtd[tvpn].dirty = 0;
         }
     }
     for (int i = 0; i < pgs_per_blk; ++i)
