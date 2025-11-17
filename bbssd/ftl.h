@@ -311,6 +311,7 @@ struct ssd {
 };
 
 void ssd_init(FemuCtrl *n);
+void ssd_print_stats(struct ssd* ssd);
 
 #ifdef FEMU_DEBUG_FTL
 #define ftl_debug(fmt, ...) \
